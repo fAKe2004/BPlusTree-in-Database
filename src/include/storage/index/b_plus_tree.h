@@ -64,6 +64,19 @@ class BPlusTree {
   using InternalPage = BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>;
   using LeafPage = BPlusTreeLeafPage<KeyType, ValueType, KeyComparator>;
 
+  // /** Compare lhs and rhs using comparator_
+  //  * @return > -> 1
+  //  *         < -> -1
+  //  *         = -> 0
+  // **/
+  // int comp(const KeyType& lhs, const KeyType& rhs) const {
+  //   if (comparator_(lhs, rhs))
+  //     return -1;
+  //   if (comparator_(rhs, lhs))
+  //     return 1;
+  //   return 0;
+  // }
+
  public:
   explicit BPlusTree(std::string name, page_id_t header_page_id, BufferPoolManager *buffer_pool_manager,
                      const KeyComparator &comparator, int leaf_max_size = LEAF_PAGE_SIZE,
@@ -153,6 +166,21 @@ class BPlusTree {
   int leaf_max_size_;
   int internal_max_size_;
   page_id_t header_page_id_;
+
+
+/*
+  My assistant functions
+*/
+ private:
+  void InsertAtLeaf(B_PLUS_TREE_LEAF_PAGE_TYPE *leaf, int x, const KeyType& key, const ValueType& value);
+
+  void InsertAtInternal(B_PLUS_TREE_INTERNAL_PAGE_TYPE *node, int x, const KeyType& key, page_id_t child);
+
+  std::tuple<KeyType, page_id_t, page_id_t> SplitAtLeaf(B_PLUS_TREE_LEAF_PAGE_TYPE *leaf, int x, const KeyType& key, const ValueType& value/* the index of the leaf in its parent, if passed as -1, then its specialized for root as leaf*/);
+
+  std::tuple<KeyType, page_id_t, page_id_t> SplitAtInternal(B_PLUS_TREE_LEAF_PAGE_TYPE *node, int x, const KeyType& key, page_id_t child);
+
+  page_id_t PromoteRoot(const KeyType& key, page_id_t l_child, page_id_t r_child);
 };
 
 /**

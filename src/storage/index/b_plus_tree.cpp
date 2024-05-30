@@ -1,3 +1,5 @@
+// make b_plus_tree_insert_test b_plus_tree_delete_test b_plus_tree_contention_test b_plus_tree_concurrent_test -j$(nproc)  > build.out 2>&1
+
 #include "storage/index/b_plus_tree.h"
 
 #include <sstream>
@@ -18,6 +20,22 @@
 
 namespace bustub
 {
+
+/*
+  MY DEFINITION FOR CONVENIENCE
+*/
+
+#define AsGeneral template As<BPlusTreePage>
+#define AsHeader template As<BPlusTreeHeaderPage>
+#define AsInternal template As<B_PLUS_TREE_INTERNAL_PAGE_TYPE>
+#define AsLeaf template As<B_PLUS_TREE_LEAF_PAGE_TYPE>
+
+#define AsMutHeader template AsMut<BPlusTreeHeaderPage>
+#define AsMutInternal template AsMut<B_PLUS_TREE_INTERNAL_PAGE_TYPE>
+#define AsMutLeaf template AsMut<B_PLUS_TREE_LEAF_PAGE_TYPE>
+
+
+// END OF MY DEFINITION
 
 INDEX_TEMPLATE_ARGUMENTS
 BPLUSTREE_TYPE::BPlusTree(std::string name, page_id_t header_page_id,
@@ -68,7 +86,32 @@ auto BPLUSTREE_TYPE::GetValue(const KeyType& key,
                               std::vector<ValueType>* result, Transaction* txn)
      ->  bool
 {
-  //Your code here
+  // std::deque<ReadPageGuard> guards;
+  ReadPageGuard guard;
+  guard = std::move(bpm_ -> FetchPageRead(header_page_id_));
+  // guards.push_back(std::move(bpm_ -> FetchPageRead(header_page_id_)));
+
+  const BPlusTreeHeaderPage *header = guard.AsHeader();
+  // const BPlusTreeHeaderPage *header = guards.back().AsHeader();
+  if (header->root_page_id_ == INVALID_PAGE_ID)
+    return false;
+  guard = std::move(bpm_ -> FetchPageRead(header->root_page_id_));
+  const B_PLUS_TREE_INTERNAL_PAGE_TYPE *node = guard.AsInternal();
+
+  while (!node->IsLeafPage()) {
+    int target_child = BinaryFind(node, key);
+    guard = std::move(
+      bpm_ -> FetchPageRead(node.ValueAt(target_child)
+    ));
+    node = guard.AsInternal();
+
+  }
+
+  const B_PLUS_TREE_LEAF_PAGE_TYPE* leaf = guard.AsLeaf();
+  int target_position = BinaryFind(leaf, key);
+  if (target_position == -1 || comparator_(leaf->KeyAt(target_position), key) != 0)
+    return false;
+  result->push_back(leaf.ValueAt(target_position));
   return true;
 }
 
@@ -88,9 +131,208 @@ INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::Insert(const KeyType& key, const ValueType& value,
                             Transaction* txn)  ->  bool
 {
+  // 我想还是得手动 fetch root, 不能直接 call IsEmpty, 不然多个 Insert 同时做这件事，可能会多线程错误，因为 root 没锁。
+  WritePageGuard header_guard = bpm_->FetchPageWrite(header_page_id_);
+  BPlusTreeHeaderPage *header = header_guard.AsMutHeader();
+  if (header->root_page_id_ == INVALID_PAGE_ID) { // When tree is empty
+    WritePageGuard root_guard = (bpm_->NewPageGuarded(&header->root_page_id_)).UpgradeWrite();
+    LeafPage *root = root_guard.AsMutLeaf();
+    root->Init(leaf_max_size_);
+    root->IncreaseSize(1);
+    root->SetKeyAt(0, key);
+    root->SetValueAt(0, value);
+    return true;
+  }
+
+  bool root_released = false;
+
+  std::deque<WritePageGuard> guards;
+  guards.push_back(std::move(bpm_ -> FetchPageWrite(header->root_page_id_)));
+
+  std::deque<int> target_childs(1, -1);
+
+  B_PLUS_TREE_INTERNAL_PAGE_TYPE* node = guards.back().AsMutInternal();
+
+  while (!node->IsLeafPage()) {
+    int target_child = BinaryFind(node, key);
+    target_childs.push_back(target_child);
+
+    guards.push_back(std::move(
+      bpm_ -> FetchPageWrite(node.ValueAt(target_child)
+    )));
+    node = guards.back().AsMutInternal();
+    if (!node->IsLeafPage() && node->GetSize() < node->GetMaxSize())
+      while (guards.size() > 1) {
+        target_childs.pop_front();
+        guards.pop_front();
+        root_released = true;
+      }
+  }
+
+  B_PLUS_TREE_LEAF_PAGE_TYPE* leaf = guards.back().AsMutLeaf();
+  
+  int target_position = BinaryFind(leaf, key);
+  if (target_position != -1 && comparator_(leaf->KeyAt(target_position), key) == 0) // Key exists
+    return false;
+
+  // Note that we always send key to a leaf where key >= minimum of the leaf, except for the left-most leaf, so no modification for key at any internal node is necessary.
+
+  if (leaf->GetSize() < leaf->GetMaxSize()) { // safe node
+    while (guards.size() > 1)
+      guards.pop_front();
+    InsertAtLeaf(leaf, target_position, key, value);
+  } else { // dangerous case
+    KeyType split_key;
+    page_id_t l_child, r_child;
+    B_PLUS_TREE_INTERNAL_PAGE_TYPE *parent = guards[guards.size() - 2].AsMutInternal();
+
+    std::tie(split_key, l_child, r_child) = SplitAtLeaf(leaf, target_position, key, value);
+
+    parent->SetValueAt(target_position, l_child);
+
+    for (int i = guards.size() - 2; i >= 1; i--) {
+      B_PLUS_TREE_INTERNAL_PAGE_TYPE *node = guards[i].AsMutInternal();
+      *parent = guards[i - 1].AsMutInternal();
+      std::tie(split_key, l_child, r_child) = SplitAtInternal(node, target_childs[i], split_key, r_child);
+
+      parent->SetValueAt(target_childs[i], l_child);
+    }
+
+    if (root_released) { // root will not be promoted to next level     
+      parent = guards.front().AsMutInternal();
+
+      parent->SetValueAt(target_childs.front(), l_child);
+      InsertAtInternal(node, target_childs.front(), split_key, r_child);
+    } else { // root will be promoted
+      header->root_page_id_ =  PromoteRoot(split_key, l_child, r_child);
+    }
+  }
   //Your code here
   return true;
 }
+
+INDEX_TEMPLATE_ARGUMENTS
+void BPLUSTREE_TYPE::InsertAtLeaf(B_PLUS_TREE_LEAF_PAGE_TYPE *node, int x, const KeyType& key, const ValueType& value) { // non-split case
+  node->IncreaseSize(1);
+  for (int i = x + 1; i < node->GetSize() - 1; i++)
+    node->SetAt(i + 1, node->KeyAt(i), node->ValueAt(i));
+  node->SetAt(x + 1, key, value);
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+void BPLUSTREE_TYPE::InsertAtInternal(B_PLUS_TREE_INTERNAL_PAGE_TYPE *node, int x /*cannot be 0*/ , const KeyType& key, page_id_t value) { // non-split case
+  node->IncreaseSize(1);
+  for (int i = x + 1; i < node->GetSize() - 1; i++)
+    node->SetAt(i + 1, node->KeyAt(i), node->ValueAt(i));
+  node->SetAt(x + 1, key, value);
+}
+
+
+INDEX_TEMPLATE_ARGUMENTS
+ std::tuple<KeyType, page_id_t, page_id_t> BPLUSTREE_TYPE::SplitAtLeaf(B_PLUS_TREE_LEAF_PAGE_TYPE *node, int x, const KeyType& key, const ValueType& value) {
+  page_id_t l_node_id, r_node_id;
+  WritePageGuard l_node_guard = bpm_->NewPageGuarded(&l_node_id).UpgradeWrite();
+  WritePageGuard r_node_guard = bpm_->NewPageGuarded(&r_node_id).UpgradeWrite();
+  B_PLUS_TREE_LEAF_PAGE_TYPE *l_node = l_node_guard.AsMutLeaf(), *r_node = r_node_guard.AsMutLeaf();
+  l_node->Init(leaf_max_size_), r_node->Init(leaf_max_size_);
+
+  for (int j = 0; j < l_node->GetMaxSize(); j++) {
+    l_node->IncreaseSize(1);
+    if (j == x + 1)
+      l_node->SetAt(j, key, value);
+    else
+      l_node->SetAt(j, 
+        node->KeyAt(j - (j > x)), 
+        node->ValueAt(j - (j > x))
+        );
+  }
+  int l_size = l_node->GetSize();
+  for (int j = 0; j < node->GetSize() - l_size; j++) {
+    if (j + l_size == x + 1)
+      r_node->SetAt(j, key, value);
+    else 
+      r_node->SetAt(j,
+        node->KeyAt(j + l_size - (j + l_size > x)),
+        node->ValueAt(j + l_size - (j + l_size > x))
+        );
+  }
+
+  return std::make_tuple(r_node->KeyAt(0), l_node_id, r_node_id);
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+ std::tuple<KeyType, page_id_t, page_id_t> BPLUSTREE_TYPE::SplitAtInternal(B_PLUS_TREE_LEAF_PAGE_TYPE *node, int x, const KeyType& key, page_id_t value /* child page_id */) {
+  page_id_t l_node_id, r_node_id;
+  WritePageGuard l_node_guard = bpm_->NewPageGuarded(&l_node_id).UpgradeWrite();
+  WritePageGuard r_node_guard = bpm_->NewPageGuarded(&r_node_id).UpgradeWrite();
+  B_PLUS_TREE_LEAF_PAGE_TYPE *l_node = l_node_guard.AsMutInternal(), *r_node = r_node_guard.AsMutLeaf();
+  l_node->Init(internal_max_size_), r_node->Init(internal_max_size_);
+
+  for (int j = 0; j < l_node->GetMaxSize(); j++) {
+    l_node->IncreaseSize(1);
+    if (j == x + 1)
+      l_node->SetAt(j, key, value);
+    else
+      l_node->SetAt(j, 
+        node->KeyAt(j - (j > x)), 
+        node->ValueAt(j - (j > x))
+        );
+  }
+
+  int l_size = l_node->GetSize();
+
+  for (int j = 0; j < node->GetSize() - l_size; j++) {
+    r_node->IncreaseSize(1);
+    if (j + l_size == x + 1)
+      r_node->SetAt(j, key, value);
+    else 
+      r_node->SetAt(j,
+        node->KeyAt(j + l_size - (j + l_size > x)),
+        node->ValueAt(j + l_size - (j + l_size > x))
+        );
+  }
+
+  return std::make_tuple(r_node->KeyAt(0), l_node_id, r_node_id); // 从代码来看，0 处是有内存空间的。
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+page_id_t BPLUSTREE_TYPE::PromoteRoot(const KeyType& key, page_id_t l_child, page_id_t r_child) {
+  page_id_t root_id;
+  WritePageGuard root_guard = bpm_->NewPageGuarded(&root_id).UpgradeWrite();
+  B_PLUS_TREE_INTERNAL_PAGE_TYPE *root = root_guard.AsMutInternal();
+  root->Init(internal_max_size_);
+  root->SetSize(2);
+  root->SetKeyAt(1, key);
+  root->SetValueAt(0, l_child);
+  root->SetValueAt(1, r_child);
+  return root_id;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 /*****************************************************************************
@@ -115,6 +357,7 @@ void BPLUSTREE_TYPE::Remove(const KeyType& key, Transaction* txn)
  *****************************************************************************/
 
 
+// Find last i of key' with key' <= key (exact insert position : after i)
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::BinaryFind(const LeafPage* leaf_page, const KeyType& key)
      ->  int
@@ -124,11 +367,11 @@ auto BPLUSTREE_TYPE::BinaryFind(const LeafPage* leaf_page, const KeyType& key)
   while (l < r)
   {
     int mid = (l + r + 1) >> 1;
-    if (comparator_(leaf_page -> KeyAt(mid), key) != 1)
+    if (comparator_(leaf_page -> KeyAt(mid), key) != 1) // key <= key'
     {
       l = mid;
     }
-    else
+    else // key > key'
     {
       r = mid - 1;
     }
@@ -142,6 +385,8 @@ auto BPLUSTREE_TYPE::BinaryFind(const LeafPage* leaf_page, const KeyType& key)
   return r;
 }
 
+
+// Find last i of key' with key' <= key (exact child : i)
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::BinaryFind(const InternalPage* internal_page,
                                 const KeyType& key)  ->  int
@@ -151,7 +396,7 @@ auto BPLUSTREE_TYPE::BinaryFind(const InternalPage* internal_page,
   while (l < r)
   {
     int mid = (l + r + 1) >> 1;
-    if (comparator_(internal_page -> KeyAt(mid), key) != 1)
+    if (comparator_(internal_page -> KeyAt(mid), key) != 1) // key <= key'
     {
       l = mid;
     }
