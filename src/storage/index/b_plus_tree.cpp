@@ -1,5 +1,6 @@
-// make b_plus_tree_insert_test b_plus_tree_delete_test b_plus_tree_contention_test b_plus_tree_concurrent_test -j$(nproc)  > build.out 2>&1
-
+/*
+ make b_plus_tree_insert_test b_plus_tree_delete_test b_plus_tree_contention_test b_plus_tree_concurrent_test -j$(nproc)  > build.out 2>&1
+*/
 #include "storage/index/b_plus_tree.h"
 
 #include <sstream>
@@ -27,12 +28,12 @@ namespace bustub
 
 #define AsGeneral template As<BPlusTreePage>
 #define AsHeader template As<BPlusTreeHeaderPage>
-#define AsInternal template As<B_PLUS_TREE_INTERNAL_PAGE_TYPE>
-#define AsLeaf template As<B_PLUS_TREE_LEAF_PAGE_TYPE>
+#define AsInternal template As<InternalPage>
+#define AsLeaf template As<LeafPage>
 
 #define AsMutHeader template AsMut<BPlusTreeHeaderPage>
-#define AsMutInternal template AsMut<B_PLUS_TREE_INTERNAL_PAGE_TYPE>
-#define AsMutLeaf template AsMut<B_PLUS_TREE_LEAF_PAGE_TYPE>
+#define AsMutInternal template AsMut<InternalPage>
+#define AsMutLeaf template AsMut<LeafPage>
 
 
 // END OF MY DEFINITION
@@ -96,22 +97,22 @@ auto BPLUSTREE_TYPE::GetValue(const KeyType& key,
   if (header->root_page_id_ == INVALID_PAGE_ID)
     return false;
   guard = std::move(bpm_ -> FetchPageRead(header->root_page_id_));
-  const B_PLUS_TREE_INTERNAL_PAGE_TYPE *node = guard.AsInternal();
+  const InternalPage *node = guard.AsInternal();
 
   while (!node->IsLeafPage()) {
     int target_child = BinaryFind(node, key);
     guard = std::move(
-      bpm_ -> FetchPageRead(node.ValueAt(target_child)
+      bpm_ -> FetchPageRead(node->ValueAt(target_child)
     ));
     node = guard.AsInternal();
 
   }
 
-  const B_PLUS_TREE_LEAF_PAGE_TYPE* leaf = guard.AsLeaf();
+  const LeafPage* leaf = guard.AsLeaf();
   int target_position = BinaryFind(leaf, key);
   if (target_position == -1 || comparator_(leaf->KeyAt(target_position), key) != 0)
     return false;
-  result->push_back(leaf.ValueAt(target_position));
+  result->push_back(leaf->ValueAt(target_position));
   return true;
 }
 
@@ -126,11 +127,18 @@ auto BPLUSTREE_TYPE::GetValue(const KeyType& key,
  * keys return false, otherwise return true.
  */
 
+// int INSERT_CNT; // debug
 
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::Insert(const KeyType& key, const ValueType& value,
                             Transaction* txn)  ->  bool
 {
+  // debug
+  // INSERT_CNT++;
+
+
+
+
   // 我想还是得手动 fetch root, 不能直接 call IsEmpty, 不然多个 Insert 同时做这件事，可能会多线程错误，因为 root 没锁。
   WritePageGuard header_guard = bpm_->FetchPageWrite(header_page_id_);
   BPlusTreeHeaderPage *header = header_guard.AsMutHeader();
@@ -144,21 +152,23 @@ auto BPLUSTREE_TYPE::Insert(const KeyType& key, const ValueType& value,
     return true;
   }
 
-  bool root_released = false;
 
   std::deque<WritePageGuard> guards;
   guards.push_back(std::move(bpm_ -> FetchPageWrite(header->root_page_id_)));
+  
+  const BPlusTreePage* root_released_assist = guards.front().AsGeneral();
+  bool root_released = (root_released_assist->GetSize() != root_released_assist->GetMaxSize()); // whether root is full and will split after insert
 
   std::deque<int> target_childs(1, -1);
 
-  B_PLUS_TREE_INTERNAL_PAGE_TYPE* node = guards.back().AsMutInternal();
+  InternalPage* node = guards.back().AsMutInternal();
 
   while (!node->IsLeafPage()) {
     int target_child = BinaryFind(node, key);
     target_childs.push_back(target_child);
 
     guards.push_back(std::move(
-      bpm_ -> FetchPageWrite(node.ValueAt(target_child)
+      bpm_ -> FetchPageWrite(node->ValueAt(target_child)
     )));
     node = guards.back().AsMutInternal();
     if (!node->IsLeafPage() && node->GetSize() < node->GetMaxSize())
@@ -169,7 +179,7 @@ auto BPLUSTREE_TYPE::Insert(const KeyType& key, const ValueType& value,
       }
   }
 
-  B_PLUS_TREE_LEAF_PAGE_TYPE* leaf = guards.back().AsMutLeaf();
+  LeafPage* leaf = guards.back().AsMutLeaf();
   
   int target_position = BinaryFind(leaf, key);
   if (target_position != -1 && comparator_(leaf->KeyAt(target_position), key) == 0) // Key exists
@@ -184,112 +194,125 @@ auto BPLUSTREE_TYPE::Insert(const KeyType& key, const ValueType& value,
   } else { // dangerous case
     KeyType split_key;
     page_id_t l_child, r_child;
-    B_PLUS_TREE_INTERNAL_PAGE_TYPE *parent = guards[guards.size() - 2].AsMutInternal();
-
     std::tie(split_key, l_child, r_child) = SplitAtLeaf(leaf, target_position, key, value);
+  
+    // fun fact : there is a case that the parent doesn't exist as the leaf is the root.
+    for (int i = guards.size() - 2; i >= root_released; i--) {
+      // if root_released : the guards.front won't split
+      // else : the guards.front must be root and need split
+      InternalPage *node = guards[i].AsMutInternal();
 
-    parent->SetValueAt(target_position, l_child);
-
-    for (int i = guards.size() - 2; i >= 1; i--) {
-      B_PLUS_TREE_INTERNAL_PAGE_TYPE *node = guards[i].AsMutInternal();
-      *parent = guards[i - 1].AsMutInternal();
-      std::tie(split_key, l_child, r_child) = SplitAtInternal(node, target_childs[i], split_key, r_child);
-
-      parent->SetValueAt(target_childs[i], l_child);
+      node->SetValueAt(target_childs[i + 1], l_child);
+      std::tie(split_key, l_child, r_child) = SplitAtInternal(node, target_childs[i + 1], split_key, r_child);
     }
 
-    if (root_released) { // root will not be promoted to next level     
-      parent = guards.front().AsMutInternal();
-
-      parent->SetValueAt(target_childs.front(), l_child);
-      InsertAtInternal(node, target_childs.front(), split_key, r_child);
-    } else { // root will be promoted
+    if (root_released) { // root will not be promoted to next level
+      // note that, if this part is executed, root must not be the leaf, and thus targets_child[1] is ok
+      InternalPage *node = guards.front().AsMutInternal();
+      node->SetValueAt(target_childs[1], l_child);
+      InsertAtInternal(node, target_childs[1], split_key, r_child);
+    } else { // root will be promoted      
       header->root_page_id_ =  PromoteRoot(split_key, l_child, r_child);
     }
   }
+
+  // ToPrintableBPlusTree(header->root_page_id_).Print(std::cerr); // debug
+
   //Your code here
   return true;
 }
 
 INDEX_TEMPLATE_ARGUMENTS
-void BPLUSTREE_TYPE::InsertAtLeaf(B_PLUS_TREE_LEAF_PAGE_TYPE *node, int x, const KeyType& key, const ValueType& value) { // non-split case
+void BPLUSTREE_TYPE::InsertAtLeaf(LeafPage *node, int x, const KeyType& key, const ValueType& value) { // non-split case
   node->IncreaseSize(1);
-  for (int i = x + 1; i < node->GetSize() - 1; i++)
-    node->SetAt(i + 1, node->KeyAt(i), node->ValueAt(i));
+  for (int i = node->GetSize() - 1; i > x + 1; i--)
+    node->SetAt(i, node->KeyAt(i - 1), node->ValueAt(i - 1));
   node->SetAt(x + 1, key, value);
 }
 
 INDEX_TEMPLATE_ARGUMENTS
-void BPLUSTREE_TYPE::InsertAtInternal(B_PLUS_TREE_INTERNAL_PAGE_TYPE *node, int x /*cannot be 0*/ , const KeyType& key, page_id_t value) { // non-split case
+void BPLUSTREE_TYPE::InsertAtInternal(InternalPage *node, int x /*cannot be 0*/ , const KeyType& key, page_id_t value) { // non-split case
   node->IncreaseSize(1);
-  for (int i = x + 1; i < node->GetSize() - 1; i++)
-    node->SetAt(i + 1, node->KeyAt(i), node->ValueAt(i));
-  node->SetAt(x + 1, key, value);
+  for (int i = node->GetSize() - 1; i > x + 1; i--) {
+    node->SetKeyAt(i, node->KeyAt(i - 1));
+    node->SetValueAt(i, node->ValueAt(i - 1));
+  }
+  node->SetKeyAt(x + 1, key);
+  node->SetValueAt(x + 1, value);
 }
 
 
 INDEX_TEMPLATE_ARGUMENTS
- std::tuple<KeyType, page_id_t, page_id_t> BPLUSTREE_TYPE::SplitAtLeaf(B_PLUS_TREE_LEAF_PAGE_TYPE *node, int x, const KeyType& key, const ValueType& value) {
+ std::tuple<KeyType, page_id_t, page_id_t> BPLUSTREE_TYPE::SplitAtLeaf(LeafPage *node, int x, const KeyType& key, const ValueType& value) {
   page_id_t l_node_id, r_node_id;
   WritePageGuard l_node_guard = bpm_->NewPageGuarded(&l_node_id).UpgradeWrite();
   WritePageGuard r_node_guard = bpm_->NewPageGuarded(&r_node_id).UpgradeWrite();
-  B_PLUS_TREE_LEAF_PAGE_TYPE *l_node = l_node_guard.AsMutLeaf(), *r_node = r_node_guard.AsMutLeaf();
+  LeafPage *l_node = l_node_guard.AsMutLeaf(), *r_node = r_node_guard.AsMutLeaf();
   l_node->Init(leaf_max_size_), r_node->Init(leaf_max_size_);
 
   for (int j = 0; j < l_node->GetMaxSize(); j++) {
     l_node->IncreaseSize(1);
-    if (j == x + 1)
-      l_node->SetAt(j, key, value);
-    else
-      l_node->SetAt(j, 
-        node->KeyAt(j - (j > x)), 
-        node->ValueAt(j - (j > x))
-        );
+    if (j == x + 1) {
+      l_node->SetKeyAt(j, key);
+      l_node->SetValueAt(j, value);
+    } 
+      else
+      l_node->SetKeyAt(j, 
+        node->KeyAt(j - (j > x)));
+      l_node->SetValueAt(j, 
+        node->ValueAt(j - (j > x)));
   }
   int l_size = l_node->GetSize();
-  for (int j = 0; j < node->GetSize() - l_size; j++) {
-    if (j + l_size == x + 1)
-      r_node->SetAt(j, key, value);
-    else 
-      r_node->SetAt(j,
-        node->KeyAt(j + l_size - (j + l_size > x)),
-        node->ValueAt(j + l_size - (j + l_size > x))
-        );
+  for (int j = 0; j < node->GetSize() + 1 - l_size; j++) {
+    r_node->IncreaseSize(1);
+    if (j + l_size == x + 1) {
+      r_node->SetKeyAt(j, key);
+      r_node->SetValueAt(j, value);
+    } else {
+      r_node->SetKeyAt(j,
+        node->KeyAt(j + l_size - (j + l_size > x)));
+      r_node->SetValueAt(j,
+        node->ValueAt(j + l_size - (j + l_size > x)));
+    }
   }
 
   return std::make_tuple(r_node->KeyAt(0), l_node_id, r_node_id);
 }
 
 INDEX_TEMPLATE_ARGUMENTS
- std::tuple<KeyType, page_id_t, page_id_t> BPLUSTREE_TYPE::SplitAtInternal(B_PLUS_TREE_LEAF_PAGE_TYPE *node, int x, const KeyType& key, page_id_t value /* child page_id */) {
+ std::tuple<KeyType, page_id_t, page_id_t> BPLUSTREE_TYPE::SplitAtInternal(InternalPage *node, int x, const KeyType& key, page_id_t value /* child page_id */) {
   page_id_t l_node_id, r_node_id;
   WritePageGuard l_node_guard = bpm_->NewPageGuarded(&l_node_id).UpgradeWrite();
   WritePageGuard r_node_guard = bpm_->NewPageGuarded(&r_node_id).UpgradeWrite();
-  B_PLUS_TREE_LEAF_PAGE_TYPE *l_node = l_node_guard.AsMutInternal(), *r_node = r_node_guard.AsMutLeaf();
+  InternalPage *l_node = l_node_guard.AsMutInternal(), *r_node = r_node_guard.AsMutInternal();
   l_node->Init(internal_max_size_), r_node->Init(internal_max_size_);
 
   for (int j = 0; j < l_node->GetMaxSize(); j++) {
     l_node->IncreaseSize(1);
-    if (j == x + 1)
-      l_node->SetAt(j, key, value);
-    else
-      l_node->SetAt(j, 
-        node->KeyAt(j - (j > x)), 
-        node->ValueAt(j - (j > x))
-        );
+    if (j == x + 1) {
+      l_node->SetKeyAt(j, key);
+      l_node->SetValueAt(j, value);
+    } 
+      else
+      l_node->SetKeyAt(j, 
+        node->KeyAt(j - (j > x)));
+      l_node->SetValueAt(j, 
+        node->ValueAt(j - (j > x)));
   }
 
   int l_size = l_node->GetSize();
 
-  for (int j = 0; j < node->GetSize() - l_size; j++) {
+  for (int j = 0; j < node->GetSize() + 1 - l_size; j++) {
     r_node->IncreaseSize(1);
-    if (j + l_size == x + 1)
-      r_node->SetAt(j, key, value);
-    else 
-      r_node->SetAt(j,
-        node->KeyAt(j + l_size - (j + l_size > x)),
-        node->ValueAt(j + l_size - (j + l_size > x))
-        );
+    if (j + l_size == x + 1) {
+      r_node->SetKeyAt(j, key);
+      r_node->SetValueAt(j, value);
+    } else {
+      r_node->SetKeyAt(j,
+        node->KeyAt(j + l_size - (j + l_size > x)));
+      r_node->SetValueAt(j,
+        node->ValueAt(j + l_size - (j + l_size > x)));
+    }
   }
 
   return std::make_tuple(r_node->KeyAt(0), l_node_id, r_node_id); // 从代码来看，0 处是有内存空间的。
@@ -299,7 +322,7 @@ INDEX_TEMPLATE_ARGUMENTS
 page_id_t BPLUSTREE_TYPE::PromoteRoot(const KeyType& key, page_id_t l_child, page_id_t r_child) {
   page_id_t root_id;
   WritePageGuard root_guard = bpm_->NewPageGuarded(&root_id).UpgradeWrite();
-  B_PLUS_TREE_INTERNAL_PAGE_TYPE *root = root_guard.AsMutInternal();
+  InternalPage *root = root_guard.AsMutInternal();
   root->Init(internal_max_size_);
   root->SetSize(2);
   root->SetKeyAt(1, key);

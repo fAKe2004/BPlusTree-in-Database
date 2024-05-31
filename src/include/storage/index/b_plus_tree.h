@@ -172,13 +172,13 @@ class BPlusTree {
   My assistant functions
 */
  private:
-  void InsertAtLeaf(B_PLUS_TREE_LEAF_PAGE_TYPE *leaf, int x, const KeyType& key, const ValueType& value);
+  void InsertAtLeaf(LeafPage *leaf, int x, const KeyType& key, const ValueType& value);
 
-  void InsertAtInternal(B_PLUS_TREE_INTERNAL_PAGE_TYPE *node, int x, const KeyType& key, page_id_t child);
+  void InsertAtInternal(InternalPage *node, int x, const KeyType& key, page_id_t child);
 
-  std::tuple<KeyType, page_id_t, page_id_t> SplitAtLeaf(B_PLUS_TREE_LEAF_PAGE_TYPE *leaf, int x, const KeyType& key, const ValueType& value/* the index of the leaf in its parent, if passed as -1, then its specialized for root as leaf*/);
+  std::tuple<KeyType, page_id_t, page_id_t> SplitAtLeaf(LeafPage *leaf, int x, const KeyType& key, const ValueType& value/* the index of the leaf in its parent, if passed as -1, then its specialized for root as leaf*/);
 
-  std::tuple<KeyType, page_id_t, page_id_t> SplitAtInternal(B_PLUS_TREE_LEAF_PAGE_TYPE *node, int x, const KeyType& key, page_id_t child);
+  std::tuple<KeyType, page_id_t, page_id_t> SplitAtInternal(InternalPage *node, int x, const KeyType& key, page_id_t child);
 
   page_id_t PromoteRoot(const KeyType& key, page_id_t l_child, page_id_t r_child);
 };
