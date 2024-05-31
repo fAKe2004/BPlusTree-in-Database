@@ -151,13 +151,13 @@ TEST(BPlusTreeConcurrentTest, InsertTest1)
   GenericComparator<8> comparator(key_schema.get());
 
   auto disk_manager = std::make_unique<DiskManagerUnlimitedMemory>();
-  auto* bpm = new BufferPoolManager(50, disk_manager.get());
+  auto* bpm = new BufferPoolManager(50 * 100, disk_manager.get());
   // create and fetch header_page
   page_id_t page_id;
   auto header_page = bpm->NewPage(&page_id);
   // create b+ tree
   BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree(
-      "foo_pk", header_page->GetPageId(), bpm, comparator);
+      "foo_pk", header_page->GetPageId(), bpm, comparator, 2, 3);
   // keys to Insert
   std::vector<int64_t> keys;
   int64_t scale_factor = 100;
@@ -204,7 +204,7 @@ TEST(BPlusTreeConcurrentTest, InsertTest2)
   auto key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema.get());
   auto disk_manager = std::make_unique<DiskManagerUnlimitedMemory>();
-  auto* bpm = new BufferPoolManager(50, disk_manager.get());
+  auto* bpm = new BufferPoolManager(50 * 100, disk_manager.get());
   // create and fetch header_page
   page_id_t page_id;
   auto header_page = bpm->NewPage(&page_id);

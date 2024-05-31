@@ -28,7 +28,7 @@ bool BPlusTreeLockBenchmarkCall(size_t num_threads, int leaf_node_size,
   auto key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema.get());
   auto* disk_manager = new DiskManagerMemory(256 << 10);  // 1GB
-  auto* bpm = new BufferPoolManager(64, disk_manager);
+  auto* bpm = new BufferPoolManager(64 * 1000, disk_manager);
 
   // create and fetch header_page
   page_id_t page_id;
