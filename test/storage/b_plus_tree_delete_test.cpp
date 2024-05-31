@@ -13,17 +13,11 @@
 #include <algorithm>
 #include <cstdio>
 
-#include <random>
-
 #include "buffer/buffer_pool_manager.h"
 #include "gtest/gtest.h"
 #include "storage/disk/disk_manager_memory.h"
 #include "storage/index/b_plus_tree.h"
 #include "test_util.h"  // NOLINT
-
-#define TEST_SIZE 1000
-std::mt19937 rng(100);
-
 
 namespace bustub
 {
@@ -37,29 +31,19 @@ TEST(BPlusTreeTests, DeleteTest1)
   GenericComparator<8> comparator(key_schema.get());
 
   auto disk_manager = std::make_unique<DiskManagerUnlimitedMemory>();
-  // auto* bpm = new BufferPoolManager(50, disk_manager.get()); // debug. add pool size to support large B+ tree
-  auto* bpm = new BufferPoolManager(TEST_SIZE * 100, disk_manager.get());
+  auto* bpm = new BufferPoolManager(50, disk_manager.get());
   // create and fetch header_page
   page_id_t page_id;
   auto header_page = bpm->NewPage(&page_id);
   // create b+ tree
-  // BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree(
-  //     "foo_pk", header_page->GetPageId(), bpm, comparator);
-  // debug
   BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree(
-      "foo_pk", header_page->GetPageId(), bpm, comparator, 2, 3);
+      "foo_pk", header_page->GetPageId(), bpm, comparator);
   GenericKey<8> index_key;
   RID rid;
   // create transaction
   auto* transaction = new Transaction(0);
 
-  // std::vector<int64_t> keys = {1, 2, 3, 4, 5}; // debug
-  std::vector<int64_t> keys;
-  for (int i = 1; i <= TEST_SIZE; i++) {
-    keys.push_back(i);
-  }
-  std::shuffle(keys.begin(), keys.end(), rng);
-
+  std::vector<int64_t> keys = {1, 2, 3, 4, 5};
   for (auto key : keys)
   {
     int64_t value = key & 0xFFFFFFFF;
@@ -80,13 +64,7 @@ TEST(BPlusTreeTests, DeleteTest1)
     EXPECT_EQ(rids[0].GetSlotNum(), value);
   }
 
-  // std::vector<int64_t> remove_keys = {1, 5}; // debug
-  std::vector<int64_t> remove_keys;
-  for (int i = 1; i <= TEST_SIZE; i++) {
-    if (i % 2)
-      remove_keys.push_back(i);
-  }
-
+  std::vector<int64_t> remove_keys = {1, 5};
   for (auto key : remove_keys)
   {
     index_key.SetFromInteger(key);
@@ -104,7 +82,6 @@ TEST(BPlusTreeTests, DeleteTest1)
 
     if (!is_present)
     {
-      std::cerr << key <<" >> 0000000000000000000000000000000000\n\n\n";
       EXPECT_NE(std::find(remove_keys.begin(), remove_keys.end(), key),
                 remove_keys.end());
     }
@@ -117,8 +94,7 @@ TEST(BPlusTreeTests, DeleteTest1)
     }
   }
 
-  // EXPECT_EQ(size, 3);
-  EXPECT_EQ(size, keys.size() - remove_keys.size());
+  EXPECT_EQ(size, 3);
 
   bpm->UnpinPage(HEADER_PAGE_ID, true);
   delete transaction;
@@ -132,25 +108,19 @@ TEST(BPlusTreeTests, DeleteTest2)
   GenericComparator<8> comparator(key_schema.get());
 
   auto disk_manager = std::make_unique<DiskManagerUnlimitedMemory>();
-  // auto* bpm = new BufferPoolManager(50, disk_manager.get());
-  auto* bpm = new BufferPoolManager(TEST_SIZE * 100, disk_manager.get());
+  auto* bpm = new BufferPoolManager(50, disk_manager.get());
   // create and fetch header_page
   page_id_t page_id;
   auto header_page = bpm->NewPage(&page_id);
   // create b+ tree
   BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree(
-      "foo_pk", header_page->GetPageId(), bpm, comparator, 2, 3);
+      "foo_pk", header_page->GetPageId(), bpm, comparator);
   GenericKey<8> index_key;
   RID rid;
   // create transaction
   auto* transaction = new Transaction(0);
 
-  // std::vector<int64_t> keys = {1, 2, 3, 4, 5};
-  std::vector<int64_t> keys;
-  for (int i = 1; i <= TEST_SIZE; i++)
-    keys.push_back(i);
-  std::shuffle(keys.begin(), keys.end(), rng);
-
+  std::vector<int64_t> keys = {1, 2, 3, 4, 5};
   for (auto key : keys)
   {
     int64_t value = key & 0xFFFFFFFF;
@@ -171,9 +141,7 @@ TEST(BPlusTreeTests, DeleteTest2)
     EXPECT_EQ(rids[0].GetSlotNum(), value);
   }
 
-  std::vector<int64_t> remove_keys;
-  for (int i = 1; i <= TEST_SIZE; i++)
-    remove_keys.push_back(i);
+  std::vector<int64_t> remove_keys = {1, 5, 3, 4};
   for (auto key : remove_keys)
   {
     index_key.SetFromInteger(key);
@@ -203,7 +171,7 @@ TEST(BPlusTreeTests, DeleteTest2)
     }
   }
 
-  EXPECT_EQ(size, keys.size() - remove_keys.size());
+  EXPECT_EQ(size, 1);
 
   bpm->UnpinPage(HEADER_PAGE_ID, true);
   delete transaction;

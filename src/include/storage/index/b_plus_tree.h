@@ -176,18 +176,18 @@ class BPlusTree {
 
   void InsertAtInternal(InternalPage *node, int x, const KeyType& key, page_id_t child);
 
-  std::tuple<KeyType, page_id_t, page_id_t> SplitAtLeaf(LeafPage *leaf, int x, const KeyType& key, const ValueType& value/* the index of the leaf in its parent, if passed as -1, then its specialized for root as leaf*/);
+  std::tuple<KeyType, page_id_t, page_id_t> SplitAtLeaf(WritePageGuard& node_guard, int x, const KeyType& key, const ValueType& value/* the index of the leaf in its parent, if passed as -1, then its specialized for root as leaf*/);
 
-  std::tuple<KeyType, page_id_t, page_id_t> SplitAtInternal(InternalPage *node, int x, const KeyType& key, page_id_t child);
+  std::tuple<KeyType, page_id_t, page_id_t> SplitAtInternal(WritePageGuard& node_guard, int x, const KeyType& key, page_id_t child);
 
   page_id_t PromoteRoot(const KeyType& key, page_id_t l_child, page_id_t r_child);
 
   void EraseAtLeaf(LeafPage *node, int x);
   void EraseAtInternal(InternalPage *node, int x);
-  void BorrowAtLeaf(LeafPage *l_node, LeafPage *r_node, int direction, InternalPage *parent,  int x);
-  void BorrowAtInternal(InternalPage *l_node, InternalPage *r_node, int direction, InternalPage *parent,  int x);
-  page_id_t MergeAtLeaf(LeafPage *l_node, LeafPage *r_node, InternalPage *parent, int x);
-  page_id_t MergeAtInternal(InternalPage *l_node, InternalPage *r_node, InternalPage *parent, int x);
+  void BorrowAtLeaf(LeafPage* l_node, LeafPage* r_node, int direction, InternalPage *parent,  int x);
+  void BorrowAtInternal(InternalPage* l_node, InternalPage* r_node, int direction, InternalPage *parent,  int x);
+  page_id_t MergeAtLeaf(WritePageGuard& l_node_guard, WritePageGuard& r_node_guard, InternalPage *parent, int x);
+  page_id_t MergeAtInternal(WritePageGuard& l_node_guard, WritePageGuard& r_node_guard, InternalPage *parent, int x);
   // void DemoteRoot(page_id_t new_root)
 
   void VALIDATE_NODE(InternalPage* node);
